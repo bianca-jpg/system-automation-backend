@@ -1,0 +1,15 @@
+﻿name: TechDocs
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', 'mkdocs.yml']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    # uses: your-org/.github/.github/workflows/techdocs-publish.yml@main
+    with:
+      entity_namespace: default
+      entity_kind: Component
+      entity_name: system-automation
+    secrets: inherit

@@ -1,0 +1,1 @@
+"""Primitivos compartilhados de paginação."""

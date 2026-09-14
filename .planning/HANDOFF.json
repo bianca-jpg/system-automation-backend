@@ -1,0 +1,41 @@
+﻿{
+  "version": "1.0",
+  "timestamp": "2026-09-04T19:01:27.620Z",
+  "phase": "20",
+  "phase_name": "trava-de-or-amento-de-5-na-edi-o-manual-de-pedidos-sem-adequ",
+  "phase_dir": ".planning/phases/20-trava-de-or-amento-de-5-na-edi-o-manual-de-pedidos-sem-adequ",
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": "discuss-phase", "name": "Discussão de fase + CONTEXT.md (16 decisões D-01 a D-16)", "status": "done", "commit": "4c81115"},
+    {"id": "research", "name": "Pesquisa técnica (RESEARCH.md, achou 2 bugs críticos de ledger)", "status": "done", "commit": "e351f8b"},
+    {"id": "validation-strategy", "name": "VALIDATION.md (scaffold, Nyquist)", "status": "done", "commit": "e351f8b"},
+    {"id": "ui-spec", "name": "UI-SPEC.md gerado e aprovado pelo gsd-ui-checker (APPROVED, 2 FLAGs não-bloqueantes)", "status": "done", "commit": "e351f8b"},
+    {"id": "planner-partial", "name": "gsd-planner ainda rodando (agentId a723671bf8ea2f193) — já escreveu 20-01 a 20-04-PLAN.md (todos repo: backend)", "status": "in_progress", "progress": "4 planos de backend escritos em disco, NÃO commitados; nenhum plano de frontend visto ainda; agente segue ativo em background"}
+  ],
+  "remaining_tasks": [
+    {"id": "wait-planner", "name": "Aguardar o gsd-planner terminar (pode ainda produzir plano(s) de frontend em frontend)", "status": "not_started"},
+    {"id": "plan-checker", "name": "Rodar gsd-plan-checker em todos os PLAN.md produzidos", "status": "not_started"},
+    {"id": "revision-loop", "name": "Loop de revisão planner<->checker se houver ISSUES FOUND (max 3 iterações)", "status": "not_started"},
+    {"id": "commit-plans", "name": "Commitar os PLAN.md aprovados", "status": "not_started"},
+    {"id": "execute-phase", "name": "/gsd-execute-phase 20 (só depois dos planos aprovados)", "status": "not_started"}
+  ],
+  "blockers": [],
+  "async_jobs": [],
+  "human_actions_pending": [],
+  "decisions": [
+    {"decision": "Fase 20 criada no ROADMAP.md do backend (não do frontend) via /gsd-phase, pois é o repo com .planning/ROADMAP.md real do produto", "rationale": "frontend não tem ROADMAP.md de produto — só .planning/quick/ avulso (ver memória do usuário)", "phase": "20"},
+    {"decision": "UI-SPEC gerado antes do planner por causa do gate de bloqueio do GSD (frontend detectado, sem UI-SPEC)", "rationale": "Usuária escolheu 'gerar UI-SPEC primeiro' quando perguntada", "phase": "20"},
+    {"decision": "Pesquisa rodada antes do planejamento", "rationale": "Usuária escolheu 'pesquisar primeiro' quando perguntada; pesquisa achou 2 bugs críticos de ledger não previstos no CONTEXT.md (filtro tipo='com' na SQL de orçamento; reset de qt_solicitada a cada edição)", "phase": "20"}
+  ],
+  "uncommitted_files": [
+    ".planning/phases/20-trava-de-or-amento-de-5-na-edi-o-manual-de-pedidos-sem-adequ/20-01-PLAN.md",
+    ".planning/phases/20-trava-de-or-amento-de-5-na-edi-o-manual-de-pedidos-sem-adequ/20-02-PLAN.md",
+    ".planning/phases/20-trava-de-or-amento-de-5-na-edi-o-manual-de-pedidos-sem-adequ/20-03-PLAN.md",
+    ".planning/phases/20-trava-de-or-amento-de-5-na-edi-o-manual-de-pedidos-sem-adequ/20-04-PLAN.md"
+  ],
+  "next_action": "Checar se o gsd-planner (agentId a723671bf8ea2f193, ainda 'running' na última checagem via ListAgents) terminou e produziu plano(s) adicionais de frontend. Se sim, rodar gsd-plan-checker em TODOS os PLAN.md (20-01 a 20-04 e qualquer plano de frontend); se ainda 'running', aguardar a notificação de conclusão antes de prosseguir. NÃO commitar os PLAN.md ainda — só depois do plan-checker aprovar.",
+  "context_notes": "Sessão pausada a pedido da usuária ('guarde esse plano que vamos voltar') enquanto o planejador ainda trabalhava em background. Os 4 planos de backend cobrem: 20-01 corrige o bug do filtro tipo='com' na SQL de orçamento (orcamento_edicao.py novo); 20-02 corrige o bug do reset de qt_solicitada em edicao_grade.py/rateio.py, permitindo mudança de total só para tipo='sem'; 20-03 (wave 2, depende de 01+02) fecha a validação atômica no endpoint executar_alteracao_grades_produto com o lock existente, retornando 409 se estourar o orçamento; 20-04 (wave 2, depende de 01) expõe o orçamento agregado do pedido na projeção de leitura que o modal consome. Ainda faltam ver: (a) se apareceu plano de frontend para o modal (indicador, aviso, trava — conforme UI-SPEC), (b) a unificação salvar+aprovar (D-09) e sua tarefa correspondente, (c) rodar o plan-checker antes de qualquer execução."
+}

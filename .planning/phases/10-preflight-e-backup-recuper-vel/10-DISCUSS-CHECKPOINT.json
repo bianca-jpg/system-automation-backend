@@ -1,0 +1,90 @@
+{
+  "phase": "10",
+  "phase_name": "Preflight e backup recuperável",
+  "timestamp": "2026-08-10T12:00:00-03:00",
+  "areas_completed": ["Estratégia de backup e origem dos dados", "Relatório de conferência", "Segredos e credenciais", "Preparação do corte"],
+  "areas_remaining": [],
+  "decisions": {
+    "Estratégia de backup e origem dos dados": [
+      {
+        "question": "Onde guardar o backup?",
+        "answer": "A usuária informou que os dados estão no Databricks e decidiu fazer primeiro um inventário sem backup nem cópia.",
+        "options_presented": ["Nesta máquina e AWS", "Só nesta máquina", "Só na AWS", "Inventário primeiro"]
+      }
+    ],
+    "Relatório de conferência": [
+      {
+        "question": "Como conferir o inventário?",
+        "answer": "Relatório automático.",
+        "options_presented": ["Relatório automático", "Conferir no DBeaver", "Os dois"]
+      },
+      {
+        "question": "O que o relatório deve mostrar?",
+        "answer": "Nome da tabela, quantidade de registros e origem provável.",
+        "options_presented": ["Contagens e origem", "Só contagens", "Também amostras"]
+      },
+      {
+        "question": "Onde guardar o relatório?",
+        "answer": "No planejamento do projeto, sem conteúdo sensível.",
+        "options_presented": ["Planejamento", "Terminal", "Os dois"]
+      },
+      {
+        "question": "Como seguir após o inventário?",
+        "answer": "Parar e pedir aprovação da usuária antes de qualquer cópia.",
+        "options_presented": ["Pedir aprovação", "Seguir automaticamente", "Somente documentar"]
+      }
+    ],
+    "Segredos e credenciais": [
+      {
+        "question": "Onde fica a senha do Aurora?",
+        "answer": "AWS Secrets Manager.",
+        "options_presented": ["AWS Secrets Manager", ".env local", "Pedir em cada execução"]
+      },
+      {
+        "question": "Como mostrar a conexão nos relatórios?",
+        "answer": "Somente identificadores seguros, sem URL ou senha.",
+        "options_presented": ["Identificadores seguros", "URL mascarada", "URL completa"]
+      },
+      {
+        "question": "Como obter a senha do Postgres local?",
+        "answer": "Ler o .env apenas durante a execução, sem persistir o segredo.",
+        "options_presented": ["Ler .env durante execução", "Pedir senha", "Mover para Secrets Manager"]
+      },
+      {
+        "question": "Quais permissões usar no Aurora nesta fase?",
+        "answer": "Somente leitura; nenhuma escrita no Aurora durante o inventário.",
+        "options_presented": ["Somente leitura", "Criar tabelas de teste", "Permissão completa"]
+      }
+    ],
+    "Preparação do corte": [
+      {
+        "question": "Como executar o corte final?",
+        "answer": "Em janela planejada, com a aplicação temporariamente parada.",
+        "options_presented": ["Janela planejada", "Aplicação ativa", "Decidir depois"]
+      },
+      {
+        "question": "Quais serviços parar?",
+        "answer": "API, worker e agendador.",
+        "options_presented": ["API, worker e agendador", "Somente API", "Somente agendador"]
+      },
+      {
+        "question": "O que fazer quando a validação falhar?",
+        "answer": "Voltar imediatamente para o banco local.",
+        "options_presented": ["Voltar ao local", "Manter Aurora", "Parar e pedir decisão"]
+      },
+      {
+        "question": "Qual teste final é obrigatório?",
+        "answer": "Health check, login, leitura de pedidos e uma ingestão manual antes de reabrir a aplicação.",
+        "options_presented": ["Teste completo", "Somente health", "Esperar ingestão agendada"]
+      }
+    ]
+  },
+  "deferred_ideas": [],
+  "canonical_refs": [
+    ".planning/PROJECT.md",
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/research/AURORA-MIGRATION.md",
+    ".planning/codebase/INTEGRATIONS.md"
+  ]
+}

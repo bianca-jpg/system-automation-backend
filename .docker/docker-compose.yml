@@ -1,0 +1,238 @@
+﻿name: system-automation
+
+services:
+  dev_db:
+    image: postgres:16-alpine
+    container_name: system_automation_db
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_USER: ${DEV_POSTGRES_USER:-${POSTGRES_USER:-automation}}
+      POSTGRES_PASSWORD: ${DEV_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD:-automation}}
+      POSTGRES_DB: ${DEV_POSTGRES_DB:-${POSTGRES_DB:-system_automation}}
+    ports:
+      - "${DEV_POSTGRES_PORT:-${POSTGRES_PORT:-5432}}:5432"
+    volumes:
+      - automation_dev_db:/var/lib/postgresql/data
+    networks:
+      - automation_network
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DEV_POSTGRES_USER:-${POSTGRES_USER:-automation}} -d ${DEV_POSTGRES_DB:-${POSTGRES_DB:-system_automation}}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+
+  redis:
+    image: redis:7-alpine
+    container_name: system_automation_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - automation_redis_data:/data
+    networks:
+      - automation_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+
+  api:
+    build:
+      context: ..
+      dockerfile: .docker/Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+        INSTALL_DEV: "true"
+    container_name: system_automation_api
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      - ../app:/workspace/app
+      - ../alembic:/workspace/alembic
+      # Somente leitura, exclusivo para a suíte de testes. Vários testes de
+      # conformidade (test_celery_routing, test_docs_seguranca,
+      # test_pipeline_safety) leem arquivos do repositório fora de app/ e
+      # alembic/. Sem estes mounts eles falham com FileNotFoundError no dev
+      # local e passam no CI, onde o repositório inteiro está presente — um
+      # falso vermelho que mascara regressões reais.
+      - ../.docker:/workspace/.docker:ro
+      - ../.github:/workspace/.github:ro
+      - ../docs:/workspace/docs:ro
+      - ../.env.example:/workspace/.env.example:ro
+    command: >-
+      sh -c "uv run alembic upgrade head &&
+      uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      --forwarded-allow-ips=* --proxy-headers"
+    networks:
+      - automation_network
+    depends_on:
+      dev_db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      ENV: dev
+      DEV_POSTGRES_HOST: dev_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+      UV_PYTHON_DOWNLOADS: never
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+
+  celery_worker:
+    build:
+      context: ..
+      dockerfile: .docker/Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+        INSTALL_DEV: "true"
+    container_name: system_automation_celery_worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    volumes:
+      - ../app:/workspace/app
+      - ../alembic:/workspace/alembic
+    command: >-
+      sh -c "alembic upgrade head &&
+      exec celery -A app.workers.celery_app worker --loglevel=info
+      --queues=celery"
+    networks:
+      - automation_network
+    depends_on:
+      redis:
+        condition: service_started
+      dev_db:
+        condition: service_healthy
+    environment:
+      ENV: dev
+      DEV_POSTGRES_HOST: dev_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      UV_PYTHON_DOWNLOADS: never
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+
+  celery_orders_worker:
+    build:
+      context: ..
+      dockerfile: .docker/Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+        INSTALL_DEV: "true"
+    container_name: system_automation_celery_orders_worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    volumes:
+      - ../app:/workspace/app
+      - ../alembic:/workspace/alembic
+    command: >-
+      sh -c "alembic upgrade head &&
+      exec celery -A app.workers.celery_app worker --loglevel=info
+      --queues=orders_processing --concurrency=1 --prefetch-multiplier=1
+      --max-tasks-per-child=${ORDERS_PROCESSING_MAX_TASKS_PER_CHILD:-20}
+      --max-memory-per-child=${ORDERS_PROCESSING_MAX_MEMORY_PER_CHILD_KB:-1048576}"
+    mem_reservation: ${ORDERS_PROCESSING_MEMORY_RESERVATION:-1280m}
+    mem_limit: ${ORDERS_PROCESSING_MEMORY_LIMIT:-1536m}
+    networks:
+      - automation_network
+    depends_on:
+      redis:
+        condition: service_started
+      dev_db:
+        condition: service_healthy
+    environment:
+      ENV: dev
+      DEV_POSTGRES_HOST: dev_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      UV_PYTHON_DOWNLOADS: never
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+
+  celery_beat:
+    build:
+      context: ..
+      dockerfile: .docker/Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+        INSTALL_DEV: "true"
+    container_name: system_automation_celery_beat
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    volumes:
+      - ../app:/workspace/app
+      - ../alembic:/workspace/alembic
+    command: >-
+      sh -c "alembic upgrade head &&
+      exec celery -A app.workers.celery_app beat --loglevel=info"
+    networks:
+      - automation_network
+    depends_on:
+      redis:
+        condition: service_started
+      celery_worker:
+        condition: service_started
+      celery_orders_worker:
+        condition: service_started
+    environment:
+      ENV: dev
+      DEV_POSTGRES_HOST: dev_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      # INGESTAO_INTERVALO_SEGUNDOS vem do env_file (../.env) — fonte única de verdade.
+      UV_PYTHON_DOWNLOADS: never
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+
+networks:
+  automation_network:
+    driver: bridge
+
+volumes:
+  automation_dev_db:
+  automation_redis_data:

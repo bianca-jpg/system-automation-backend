@@ -1,0 +1,12 @@
+﻿# Configuração do Gitleaks — regras de exclusão para evitar falsos-positivos.
+# Ref: https://github.com/gitleaks/gitleaks#configuration
+
+title = "Gitleaks config — SYSTEM-AUTOMATION Backend"
+
+# O .secrets.baseline contém hashes SHA-1 de segredos já auditados pelo
+# detect-secrets. O gitleaks os interpreta como generic-api-key, mas são
+# falsos-positivos (hashes, não segredos).
+[allowlist]
+  paths = [
+    '''\.secrets\.baseline$''',
+  ]

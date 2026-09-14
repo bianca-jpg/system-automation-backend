@@ -1,0 +1,76 @@
+﻿name: system-automation-prod
+
+# Compose autônomo para uma execução production-like com datastores gerenciados.
+# Não combine este arquivo com docker-compose.yml: ele não sobe Postgres/Redis locais.
+x-backend-service: &backend-service
+  build:
+    context: ..
+    dockerfile: .docker/Dockerfile
+    args:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+      INSTALL_DEV: "false"
+  image: system-automation-backend:${IMAGE_TAG:-local}
+  restart: unless-stopped
+  env_file:
+    - ../.env
+  environment: &prod-environment
+    ENV: prod
+    DATABASE_URL: ${PROD_DATABASE_URL:?PROD_DATABASE_URL is required}
+    REDIS_URL: ${PROD_REDIS_URL:?PROD_REDIS_URL is required}
+    CELERY_BROKER_URL: ${PROD_CELERY_BROKER_URL:?PROD_CELERY_BROKER_URL is required}
+    CELERY_RESULT_BACKEND: ${PROD_CELERY_RESULT_BACKEND:?PROD_CELERY_RESULT_BACKEND is required}
+    UV_PYTHON_DOWNLOADS: never
+  networks:
+    - automation_network
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+
+services:
+  api:
+    <<: *backend-service
+    container_name: system_automation_api_prod
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    command: >-
+      sh -c "alembic upgrade head && exec uvicorn app.main:app
+      --host 0.0.0.0 --port 8000 --forwarded-allow-ips=* --proxy-headers"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  celery_worker:
+    <<: *backend-service
+    container_name: system_automation_celery_worker_prod
+    command: >-
+      sh -c "alembic upgrade head &&
+      exec celery -A app.workers.celery_app worker --loglevel=info
+      --queues=celery"
+
+  celery_orders_worker:
+    <<: *backend-service
+    container_name: system_automation_celery_orders_worker_prod
+    command: >-
+      sh -c "alembic upgrade head &&
+      exec celery -A app.workers.celery_app worker --loglevel=info
+      --queues=orders_processing --concurrency=1 --prefetch-multiplier=1
+      --max-tasks-per-child=${ORDERS_PROCESSING_MAX_TASKS_PER_CHILD:-20}
+      --max-memory-per-child=${ORDERS_PROCESSING_MAX_MEMORY_PER_CHILD_KB:-1048576}"
+    mem_reservation: ${ORDERS_PROCESSING_MEMORY_RESERVATION:-1280m}
+    mem_limit: ${ORDERS_PROCESSING_MEMORY_LIMIT:-1536m}
+
+  celery_beat:
+    <<: *backend-service
+    container_name: system_automation_celery_beat_prod
+    command: >-
+      sh -c "alembic upgrade head &&
+      exec celery -A app.workers.celery_app beat --loglevel=info"
+
+networks:
+  automation_network:
+    driver: bridge

@@ -1,0 +1,64 @@
+﻿[project]
+name = "system-automation-backend"
+version = "0.1.0"
+description = "API System Automation"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aiosmtplib>=3.0.0",
+    "alembic>=1.14.0",
+    "asyncpg>=0.30.0",
+    "celery[redis]>=5.4.0",
+    "email-validator>=2.2.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.28.0",
+    "prometheus-client>=0.21.0",
+    "pydantic-settings>=2.6.0",
+    "python-jose[cryptography]>=3.3.0",
+    "redis>=5.2.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[dependency-groups]
+dev = [
+    "detect-secrets>=1.5.0",
+    "pre-commit>=4.2.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff==0.16.2",
+    "pyright==1.1.411",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["app/tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B", "UP", "I", "SIM", "C4"]
+
+[tool.ruff.lint.flake8-bugbear]
+# B008 proíbe chamada em default de argumento, mas em FastAPI `= Depends(...)`
+# (e afins) é a forma canônica de declarar dependência, não um default mutável.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Form",
+    "fastapi.File",
+    "fastapi.Cookie",
+    "fastapi.Security",
+]
+
+[tool.pyright]
+include = ["app", "alembic"]
+exclude = ["**/__pycache__"]
+pythonVersion = "3.13"
+pythonPlatform = "Linux"
+typeCheckingMode = "basic"

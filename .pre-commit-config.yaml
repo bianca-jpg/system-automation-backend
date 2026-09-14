@@ -1,0 +1,19 @@
+repos:
+  # ── detect-secrets (Yelp) ─────────────────────────────────
+  # Varredura baseada em heurísticas/entropia — detecta chaves,
+  # tokens e senhas genéricos que não seguem padrão de provedor.
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: 'uv\.lock$'
+
+  # ── gitleaks ──────────────────────────────────────────────
+  # Varredura baseada em regras/regex — detecta padrões conhecidos
+  # de provedores (AWS, GitHub, Databricks, Azure, SMTP, etc.).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.3
+    hooks:
+      - id: gitleaks
+        args: ['--config', '.gitleaks.toml']

@@ -1,0 +1,424 @@
+﻿name: Deploy to Amazon ECS
+
+on:
+  push:
+    branches:
+      - develop # <-- OU A RAMO QUE VOCÊ DESEJA MONITORAR PARA DEPLOY
+
+# Evita que dois pushes seguidos disparem deploys concorrentes no mesmo
+# serviço do ECS: cada deploy novo entra na fila e só começa quando o
+# anterior terminar (nunca cancela um deploy em andamento).
+concurrency:
+  group: deploy-ecs-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1 # <-- REGIÃO ONDE ESTÁ O SEU REPOSITÓRIO E O CLUSTER
+  AWS_ROLE_TO_ASSUME: arn:aws:iam::383976104411:role/github-oidc
+  ECR_REPOSITORY: system-automation-back-end # <-- NOME DO REPOSITÓRIO NO ECR
+  ECS_SERVICE: system-automation-backend-dev # <-- NOME DO SERVIÇO NO ECS
+  ECS_CLUSTER: your-ecs-cluster # <-- NOME DO CLUSTER
+  ECS_TASK_DEFINITION_FAMILY: system-automation-backend-dev # <-- NOME DA FAMÍLIA DA TASK (sem a revisão)
+  CONTAINER_NAME: system-automation-backend-dev # <-- NOME DO CONTAINER DEFINIDO NA TASK
+  ECS_WORKER_SERVICE: system-automation-worker-dev
+  ECS_WORKER_TASK_DEFINITION_FAMILY: system-automation-worker-dev
+  ECS_WORKER_CONTAINER_NAME: system-automation-worker-dev
+  ECS_ORDERS_WORKER_SERVICE: system-automation-orders-worker-dev
+  ECS_ORDERS_WORKER_TASK_DEFINITION_FAMILY: system-automation-orders-worker-dev
+  ECS_ORDERS_WORKER_CONTAINER_NAME: system-automation-orders-worker-dev
+  ECS_BEAT_SERVICE: system-automation-beat-dev
+  ECS_BEAT_TASK_DEFINITION_FAMILY: system-automation-beat-dev
+  ECS_BEAT_CONTAINER_NAME: system-automation-beat-dev
+  ECS_MIGRATIONS_TASK_DEFINITION_FAMILY: system-automation-migrations-dev
+
+jobs:
+  quality:
+    name: Quality (ruff + pyright)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Configurar uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          version: "0.11.8"
+
+      - name: Instalar dependências congeladas
+        run: uv sync --frozen --group dev
+
+      - name: Validar lint (ruff check)
+        run: uv run ruff check app alembic
+
+      - name: Validar formatação (ruff format)
+        run: uv run ruff format --check app alembic
+
+      - name: Validar tipos (pyright)
+        run: uv run pyright app alembic
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: automation
+          POSTGRES_PASSWORD: automation
+          POSTGRES_DB: system_automation_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U automation -d system_automation_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://automation:automation@127.0.0.1:5432/system_automation_test
+      TEST_DATABASE_URL: postgresql+asyncpg://automation:automation@127.0.0.1:5432/system_automation_test
+      POSTGRES_SSL_MODE: disable
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/1
+      JWT_SECRET: ci-only-not-a-production-secret
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Configurar uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          version: "0.11.8"
+
+      - name: Instalar dependências congeladas
+        run: uv sync --frozen --group dev
+
+      - name: Criar banco descartável exclusivo para migrations destrutivas
+        env:
+          PGPASSWORD: automation
+        run: >-
+          psql -h 127.0.0.1 -U automation -d postgres
+          -v ON_ERROR_STOP=1
+          -c 'CREATE DATABASE automation_migration_test_ci_test'
+
+      - name: Validar todas as migrations no banco descartável isolado
+        env:
+          MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://automation:automation@127.0.0.1:5432/automation_migration_test_ci_test
+        run: >-
+          uv run pytest
+          app/tests/test_migration_*.py -q
+
+      - name: Aplicar migrations no banco isolado
+        run: uv run alembic upgrade head
+
+      - name: Validar paridade entre models e schema migrado
+        run: uv run alembic check
+
+      - name: Executar testes
+        run: uv run pytest app/tests -q
+
+  # ── Gate de segurança: bloqueia deploy se segredos forem detectados ──
+  secret-scan:
+    name: Secret Scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # gitleaks/gitleaks-action@v2 passou a exigir GITLEAKS_LICENSE (mudança
+      # da própria gitleaks em 2024, ver github.com/gitleaks/gitleaks-action).
+      # O binário gitleaks em si continua open-source/MIT — rodamos ele direto,
+      # sem depender da Action paga.
+      - name: Instalar gitleaks (binário OSS)
+        run: |
+          curl -sSL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+
+      - name: Executar Gitleaks
+        run: ./gitleaks detect --source . --config .gitleaks.toml --redact -v
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [quality, tests, secret-scan]
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciais da AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          role-session-name: GitHubActionsECSDeploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login no Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag e push da imagem para o ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ./.docker/Dockerfile .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Rodar migrations antes do deploy
+        env:
+          IMAGE: ${{ steps.build-image.outputs.image }}
+        run: |
+          set -euo pipefail
+
+          # Obter task definition de migrations
+          aws ecs describe-task-definition --task-definition "$ECS_MIGRATIONS_TASK_DEFINITION_FAMILY" \
+            --query taskDefinition \
+          | jq --arg image "$IMAGE" '
+              del(
+                .taskDefinitionArn,
+                .revision,
+                .status,
+                .requiresAttributes,
+                .compatibilities,
+                .registeredAt,
+                .registeredBy
+              )
+              | .containerDefinitions[0].image = $image
+              | .containerDefinitions[0].command = ["sh", "-c", "alembic upgrade head"]
+            ' > task-def-migrations.json
+
+          # Registrar task definition com o comando de migrations
+          task_arn="$(aws ecs register-task-definition \
+            --cli-input-json "file://task-def-migrations.json" \
+            --query taskDefinition.taskDefinitionArn \
+            --output text)"
+
+          # Rede Fargate/awsvpc: run-task exige as mesmas subnets/SG do service da API.
+          network_configuration="$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' \
+            --output json)"
+
+          # Rodar tarefa de migrations uma única vez (run-task, não service)
+          run_out="$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$task_arn" \
+            --launch-type FARGATE \
+            --network-configuration "$network_configuration")"
+
+          task_id="$(jq -r '.tasks[0].taskArn // empty' <<< "$run_out")"
+          if [ -z "$task_id" ]; then
+            echo "Falha ao iniciar task de migrations:"
+            jq '.failures' <<< "$run_out"
+            exit 1
+          fi
+
+          echo "Tarefa de migrations iniciada: $task_id"
+
+          # Aguardar conclusão com timeout de 10 min
+          timeout 600 bash -c "
+            while true; do
+              status=\$(aws ecs describe-tasks \
+                --cluster '$ECS_CLUSTER' \
+                --tasks '$task_id' \
+                --query 'tasks[0].lastStatus' \
+                --output text)
+
+              if [ \"\$status\" = \"STOPPED\" ]; then
+                exit_code=\$(aws ecs describe-tasks \
+                  --cluster '$ECS_CLUSTER' \
+                  --tasks '$task_id' \
+                  --query 'tasks[0].containers[0].exitCode' \
+                  --output text)
+
+                if [ \"\$exit_code\" = \"0\" ]; then
+                  echo 'Migrations aplicadas com sucesso'
+                  exit 0
+                else
+                  echo 'Migrations falharam com código: '\$exit_code
+                  exit 1
+                fi
+              fi
+
+              echo 'Aguardando migrations... ('"\$status"')'
+              sleep 5
+            done
+          " || (echo 'Timeout ou erro nas migrations'; exit 1)
+
+      - name: Baixar a Task Definition atual do ECS
+        run: |
+          aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_FAMILY }} \
+          --query taskDefinition \
+          | jq --arg name "$CONTAINER_NAME" '
+              del(
+                .taskDefinitionArn,
+                .revision,
+                .status,
+                .requiresAttributes,
+                .compatibilities,
+                .registeredAt,
+                .registeredBy
+              )
+              | (.containerDefinitions[] | select(.name == $name)) |= del(.command)
+            ' > task-def.json
+
+      - name: Preencher o novo ID da imagem na Task Definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-def.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Configurar tolerância para migrations no startup
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --health-check-grace-period-seconds 300 \
+            --output json > /dev/null
+
+      - name: Deploy no Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Deploy dos processos Celery no Amazon ECS
+        env:
+          IMAGE: ${{ steps.build-image.outputs.image }}
+        run: |
+          set -euo pipefail
+
+          deploy_process() {
+            local service="$1"
+            local family="$2"
+            local container="$3"
+            local task_file="task-def-${service}.json"
+
+            aws ecs describe-task-definition --task-definition "$family" \
+              --query taskDefinition \
+            | jq --arg name "$container" --arg image "$IMAGE" '
+                del(
+                  .taskDefinitionArn,
+                  .revision,
+                  .status,
+                  .requiresAttributes,
+                  .compatibilities,
+                  .registeredAt,
+                  .registeredBy
+                )
+                | (.containerDefinitions[] | select(.name == $name) | .image) = $image
+              ' > "$task_file"
+
+            task_arn="$(aws ecs register-task-definition \
+              --cli-input-json "file://$task_file" \
+              --query taskDefinition.taskDefinitionArn \
+              --output text)"
+
+            aws ecs update-service \
+              --cluster "$ECS_CLUSTER" \
+              --service "$service" \
+              --task-definition "$task_arn" \
+              --force-new-deployment \
+              --output json > /dev/null
+
+            aws ecs wait services-stable \
+              --cluster "$ECS_CLUSTER" \
+              --services "$service"
+          }
+
+          deploy_process \
+            "$ECS_WORKER_SERVICE" \
+            "$ECS_WORKER_TASK_DEFINITION_FAMILY" \
+            "$ECS_WORKER_CONTAINER_NAME"
+          deploy_process \
+            "$ECS_ORDERS_WORKER_SERVICE" \
+            "$ECS_ORDERS_WORKER_TASK_DEFINITION_FAMILY" \
+            "$ECS_ORDERS_WORKER_CONTAINER_NAME"
+          deploy_process \
+            "$ECS_BEAT_SERVICE" \
+            "$ECS_BEAT_TASK_DEFINITION_FAMILY" \
+            "$ECS_BEAT_CONTAINER_NAME"
+
+      - name: Validar convergência de todos os serviços
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 30); do
+            state="$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services \
+                "$ECS_SERVICE" \
+                "$ECS_WORKER_SERVICE" \
+                "$ECS_ORDERS_WORKER_SERVICE" \
+                "$ECS_BEAT_SERVICE")"
+
+            if jq -e '
+                (.failures | length) == 0 and
+                ([.services[] |
+                  .desiredCount == 1 and
+                  .runningCount == 1 and
+                  .pendingCount == 0 and
+                  (.deployments | length) == 1 and
+                  .deployments[0].rolloutState == "COMPLETED"
+                ] | all)
+              ' <<< "$state" > /dev/null; then
+              jq '{services: [.services[] | {
+                serviceName,
+                desiredCount,
+                runningCount,
+                pendingCount,
+                taskDefinition,
+                rolloutState: .deployments[0].rolloutState
+              }]}' <<< "$state"
+              exit 0
+            fi
+
+            echo "Aguardando convergência final do ECS (${attempt}/30)..."
+            sleep 10
+          done
+
+          jq '{failures, services: [.services[] | {
+            serviceName,
+            desiredCount,
+            runningCount,
+            pendingCount,
+            taskDefinition,
+            deployments
+          }]}' <<< "$state"
+          exit 1
