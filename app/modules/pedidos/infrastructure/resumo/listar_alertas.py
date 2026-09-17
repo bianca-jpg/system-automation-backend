@@ -44,7 +44,9 @@ async def listar_alertas_sql(repo, consulta: ConsultaAlertas) -> PaginaCursor:
         try:
             res = await repo.db.execute(text(sql_text), params or {})
             return [dict(row) for row in res.mappings().all()]
-        except Exception:
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("Falha silenciosa ao buscar alertas: %s", exc, exc_info=True)
             return []
 
     # 1. Envio para o Linx (Desagrupado por pedido)

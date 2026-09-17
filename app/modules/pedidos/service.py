@@ -1,3 +1,4 @@
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -255,13 +256,13 @@ async def executar_aprovacao(
     )
 
 
-async def obter_resumo(db, *, include_stock: bool = False) -> dict:
+async def obter_resumo(db: AsyncSession, *, include_stock: bool = False) -> dict[str, Any]:
     return await consultas_app.obter_resumo(
         SqlPedidosReadRepository(db), include_stock=include_stock
     )
 
 
-async def listar_alertas(db, *, canal, busca, cursor, tamanho_pagina) -> dict:
+async def listar_alertas(db: AsyncSession, *, canal, busca, cursor, tamanho_pagina) -> dict[str, Any]:
     return await consultas_app.listar_alertas(
         SqlPedidosReadRepository(db),
         canal=canal,
